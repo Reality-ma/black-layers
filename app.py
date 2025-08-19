@@ -30,7 +30,7 @@ def overlay_results(original_img, edges, anomalies):
     overlay[anomalies] = [0,255,0]
     return overlay
 
-# --- 层厚度计算 ---
+# --- 层厚度计算（修复空列报错） ---
 def calculate_layer_thickness(edges):
     h, w = edges.shape
     thickness_data = []
@@ -39,17 +39,17 @@ def calculate_layer_thickness(edges):
         ys = np.where(edges[:, col])[0]
         if len(ys) >= 2:
             col_thickness = ys[1:] - ys[:-1]
-            thickness_data.append(col_thickness)
+            if len(col_thickness) > 0:
+                thickness_data.append(col_thickness)
 
     if not thickness_data:
         return None, None
 
-    # 使用 dtype=object 避免不同长度报错
-    thickness_array = np.array(thickness_data, dtype=object)
+    # 找到最长厚度列
+    max_len = max(len(x) for x in thickness_data)
 
-    # 将每列厚度转成 DataFrame，长度不足用 NaN 填充
-    max_len = max(len(x) for x in thickness_array)
-    df_data = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan) for x in thickness_array]
+    # 构建 DataFrame，每列不足长度用 NaN 填充
+    df_data = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan) for x in thickness_data]
     df = pd.DataFrame(df_data).astype(float)
 
     # 统计非零厚度
@@ -103,4 +103,3 @@ if 'img' in locals():
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         result_pil.save(tmp_file.name)
         st.download_button("下载图片", tmp_file.name, file_name="layer_detection_result.png")
-
