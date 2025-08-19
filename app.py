@@ -3,7 +3,7 @@ import numpy as np
 from PIL import Image
 import tempfile
 import pandas as pd
-from skimage import color, filters, morphology, feature, util, exposure
+from skimage import color, filters, morphology, feature, exposure
 
 st.title("黑灰色层状物层界面 & 异常杂质识别系统（无 OpenCV）")
 
@@ -44,13 +44,22 @@ def calculate_layer_thickness(edges):
     if not thickness_data:
         return None, None
 
-    thickness_array = np.array(thickness_data)
-    df = pd.DataFrame(thickness_array).fillna(0).astype(int)
+    # 使用 dtype=object 避免不同长度报错
+    thickness_array = np.array(thickness_data, dtype=object)
+
+    # 将每列厚度转成 DataFrame，长度不足用 NaN 填充
+    max_len = max(len(x) for x in thickness_array)
+    df_data = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan) for x in thickness_array]
+    df = pd.DataFrame(df_data).astype(float)
+
+    # 统计非零厚度
+    valid_values = df.values[~np.isnan(df.values) & (df.values>0)]
     stats = {
-        "平均厚度": df.values[df.values>0].mean(),
-        "最小厚度": df.values[df.values>0].min(),
-        "最大厚度": df.values[df.values>0].max()
+        "平均厚度": np.mean(valid_values),
+        "最小厚度": np.min(valid_values),
+        "最大厚度": np.max(valid_values)
     }
+
     return stats, df
 
 # --- 图像输入 ---
@@ -94,5 +103,4 @@ if 'img' in locals():
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         result_pil.save(tmp_file.name)
         st.download_button("下载图片", tmp_file.name, file_name="layer_detection_result.png")
-
 
