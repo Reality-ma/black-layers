@@ -66,7 +66,7 @@ def calculate_layer_thickness(edges):
 option = st.radio("选择图像输入方式", ["上传图片", "使用摄像头"])
 
 if option == "上传图片":
-    uploaded_file = st.file_uploader("选择图片文件", type=["jpg","png","jpeg"])
+    uploaded_file = st.file_uploader("选择图片文件", type=["jpg","png","jpeg","tif","tiff"])
     if uploaded_file is not None:
         img = Image.open(uploaded_file).convert("RGB")
 elif option == "使用摄像头":
