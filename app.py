@@ -3,38 +3,30 @@ import numpy as np
 from PIL import Image
 import tempfile
 import pandas as pd
-from skimage import color, filters, morphology, feature, util
+from skimage import color, filters, morphology, feature, util, exposure
 
 st.title("黑灰色层状物层界面 & 异常杂质识别系统（无 OpenCV）")
 
 # --- 图像处理函数 ---
 def preprocess_image(img):
     gray = color.rgb2gray(np.array(img))
-    # CLAHE 等价处理可以用自适应直方图均衡化
-    from skimage import exposure
     enhanced = exposure.equalize_adapthist(gray, clip_limit=0.03)
     return enhanced
 
 def detect_layer_edges(enhanced_gray):
-    # Canny 边缘检测
     edges = feature.canny(enhanced_gray, sigma=1.0)
-    # 水平膨胀，类似 cv2.dilate
     edges_dilated = morphology.dilation(edges, morphology.rectangle(1,25))
     return edges_dilated
 
 def detect_anomalies(enhanced_gray):
-    # 自适应阈值检测异常区域
     thresh_val = filters.threshold_local(enhanced_gray, block_size=35)
     binary = enhanced_gray < thresh_val
-    # 开操作去噪
     clean = morphology.opening(binary, morphology.square(3))
     return clean
 
 def overlay_results(original_img, edges, anomalies):
     overlay = np.array(original_img).copy()
-    # 层界面红色
     overlay[edges] = [255,0,0]
-    # 异常绿色
     overlay[anomalies] = [0,255,0]
     return overlay
 
@@ -81,7 +73,7 @@ if 'img' in locals():
     result = overlay_results(img, edges, anomalies)
 
     st.subheader("识别结果")
-    st.image(result, use_column_width=True)
+    st.image(result, use_container_width=True)
 
     # 厚度统计
     thickness_stats, thickness_df = calculate_layer_thickness(edges)
