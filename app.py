@@ -7,7 +7,7 @@ from skimage import color, filters, morphology, feature, exposure
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 
-st.title("层状物界面与杂质识别系统（增强版）")
+st.title("层状物界面与杂质识别系统（自动颜色命名版）")
 
 # --- 图像预处理 ---
 def preprocess_image(img):
@@ -32,7 +32,7 @@ def overlay_results(original_img, edges, anomalies):
     overlay[anomalies] = [0, 255, 0] # 绿色表示异常杂质
     return overlay
 
-# --- 层厚度计算 ---
+# --- 层厚度计算（隐藏输出，只用于内部）---
 def calculate_layer_thickness(edges):
     h, w = edges.shape
     thickness_data = []
@@ -42,7 +42,7 @@ def calculate_layer_thickness(edges):
         if len(ys) >= 2:
             col_thickness = ys[1:] - ys[:-1]
             if len(col_thickness) > 0:
-                thickness_data.append(col_thickness.astype(float))  # ✅ 转 float
+                thickness_data.append(col_thickness.astype(float))
 
     if not thickness_data:
         return None, None
@@ -53,17 +53,21 @@ def calculate_layer_thickness(edges):
         for x in thickness_data
     ]
     df = pd.DataFrame(df_data)
+    return df
 
-    valid_values = df.values[~np.isnan(df.values) & (df.values > 0)]
-    stats = {
-        "平均厚度": float(np.mean(valid_values)),
-        "最小厚度": float(np.min(valid_values)),
-        "最大厚度": float(np.max(valid_values))
-    }
+# --- RGB 转颜色名称 ---
+def rgb_to_name(rgb):
+    r, g, b = rgb
+    if r < 50 and g < 50 and b < 50:
+        return "黑色"
+    elif r < 120 and g < 120 and b < 120:
+        return "深灰"
+    elif r < 200 and g < 200 and b < 200:
+        return "浅灰"
+    else:
+        return "白色"
 
-    return stats, df
-
-# --- 颜色聚类分割 + 比例统计 ---
+# --- 颜色聚类 + 自动颜色命名 + 比例统计 ---
 def color_clustering(img, n_clusters=3):
     img_np = np.array(img)
     h, w, c = img_np.shape
@@ -74,16 +78,24 @@ def color_clustering(img, n_clusters=3):
 
     clustered_img = labels.reshape((h, w))
     clustered_rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    colors = np.random.randint(0, 255, size=(n_clusters, 3))
+
+    avg_colors = []
     for i in range(n_clusters):
-        clustered_rgb[clustered_img == i] = colors[i]
+        cluster_pixels = reshaped[labels == i]
+        avg_rgb = np.mean(cluster_pixels, axis=0)
+        avg_colors.append(avg_rgb)
+        clustered_img_mask = labels.reshape((h, w)) == i
+        clustered_rgb[clustered_img_mask] = avg_rgb.astype(np.uint8)
 
-    # --- 统计比例 ---
-    unique, counts = np.unique(labels, return_counts=True)
-    total = counts.sum()
-    proportions = {f"类别 {i+1}": counts[i] / total * 100 for i in range(len(unique))}
+    # 自动颜色命名
+    color_names = [rgb_to_name(avg) for avg in avg_colors]
 
-    return clustered_rgb, proportions
+    # 比例统计
+    proportions_named = {}
+    for i, name in enumerate(color_names):
+        proportions_named[name] = np.sum(labels == i) / len(labels) * 100
+
+    return clustered_rgb, proportions_named
 
 # --- 图像输入 ---
 option = st.radio("选择图像输入方式", ["上传图片", "使用摄像头"])
@@ -104,7 +116,6 @@ if 'img' in locals():
     anomalies = detect_anomalies(enhanced)
     result = overlay_results(img, edges, anomalies)
 
-    # ✅ 颜色聚类 + 比例统计
     clustered_result, proportions = color_clustering(img, n_clusters=4)
 
     st.subheader("识别结果对比")
@@ -116,38 +127,29 @@ if 'img' in locals():
     with col3:
         st.image(clustered_result, caption="颜色聚类分割", use_container_width=True)
 
-    # --- 层厚度统计 ---
-    thickness_stats, thickness_df = calculate_layer_thickness(edges)
-    if thickness_stats:
-        st.subheader("层厚度统计 (像素)")
-        st.write(thickness_stats)
-
-        csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-        thickness_df.to_csv(csv_file.name, index=False)
-        st.download_button("下载层厚度 CSV", csv_file.name, file_name="layer_thickness.csv")
-    else:
-        st.write("未检测到有效层厚度")
+    # --- 层厚度计算（内部使用，不显示） ---
+    _ = calculate_layer_thickness(edges)
 
     # --- 颜色比例统计 ---
-    st.subheader("颜色类别比例统计")
-    df_props = pd.DataFrame(list(proportions.items()), columns=["类别", "比例 (%)"])
+    st.subheader("颜色比例统计")
+    df_props = pd.DataFrame(list(proportions.items()), columns=["颜色", "比例 (%)"])
     st.table(df_props)
 
     fig, ax = plt.subplots()
-    ax.pie(df_props["比例 (%)"], labels=df_props["类别"], autopct="%.2f%%", startangle=90)
+    ax.pie(df_props["比例 (%)"], labels=df_props["颜色"], autopct="%.2f%%", startangle=90)
     ax.axis("equal")
     st.pyplot(fig)
 
-    # ✅ 增加颜色比例 CSV 下载
+    # CSV 下载
     color_csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
     df_props.to_csv(color_csv_file.name, index=False)
     st.download_button(
         "下载颜色比例 CSV",
         color_csv_file.name,
-        file_name="color_proportions.csv"
+        file_name="color_proportions_named.csv"
     )
 
-    # --- 下载识别结果图片 ---
+    # 下载识别图片
     st.subheader("下载识别结果图片")
     result_pil = Image.fromarray(result.astype(np.uint8))
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
