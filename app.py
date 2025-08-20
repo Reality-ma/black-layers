@@ -8,7 +8,7 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 import cv2
 
-st.title("层状物识别与颜色人工标注系统（偏黑敏感版+人工修改颜色）")
+st.title("层状物识别与颜色人工标注系统（偏黑敏感+次要颜色边界可调）")
 
 # --- 图像预处理 ---
 def preprocess_image(img):
@@ -79,17 +79,32 @@ def color_clustering(img, n_clusters=4):
     proportions_named = {ci[0]: ci[1] for ci in color_info}
     return clustered_rgb, proportions_named, color_info, clustered_img
 
-# --- 在聚类图上添加标签 ---
-def add_labels(clustered_rgb, clustered_img, color_labels):
+# --- 在聚类图上添加标签 + 次要颜色边界 ---
+def add_labels(clustered_rgb, clustered_img, color_labels, highlight_minor=False, minor_threshold=5, contour_color=(255,0,255), contour_thickness=2):
     labeled_img = clustered_rgb.copy()
-    for name, idx in color_labels.items():
+    for label, idx in color_labels.items():
         mask = clustered_img == idx
         if np.sum(mask) == 0:
             continue
+        # 添加标签文字
         y, x = np.argwhere(mask).mean(axis=0).astype(int)
-        cv2.putText(labeled_img, name, (x, y),
+        cv2.putText(labeled_img, label, (x, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+        # 次要颜色边界
+        if highlight_minor:
+            area_ratio = np.sum(mask) / mask.size * 100
+            if area_ratio < minor_threshold:
+                contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(labeled_img, contours, -1, contour_color, contour_thickness)
     return labeled_img
+
+# --- 侧边栏设置 ---
+st.sidebar.header("次要颜色边界设置")
+minor_threshold = st.sidebar.slider("次要颜色面积阈值 (%)", min_value=1, max_value=15, value=5, step=1)
+contour_thickness = st.sidebar.slider("边界线宽 (px)", min_value=1, max_value=5, value=2, step=1)
+contour_color_choice = st.sidebar.selectbox("边界颜色", ["紫色", "红色", "黄色", "蓝色"])
+contour_color_dict = {"紫色": (255,0,255), "红色": (255,0,0), "黄色": (255,255,0), "蓝色": (0,0,255)}
+contour_color = contour_color_dict[contour_color_choice]
 
 # --- 图像输入 ---
 option = st.radio("选择图像输入方式", ["上传图片", "使用摄像头"])
@@ -120,15 +135,16 @@ if img is not None:
         user_label = st.text_input(f"{name} ({hex_color}) 的名称", value=name)
         color_labels[user_label] = idx
 
-    # 添加标签到聚类图
-    clustered_with_labels = add_labels(clustered_result, clustered_img, color_labels)
+    # 添加标签与次要颜色边界
+    clustered_with_labels = add_labels(clustered_result, clustered_img, color_labels,
+                                       highlight_minor=True, minor_threshold=minor_threshold,
+                                       contour_color=contour_color, contour_thickness=contour_thickness)
 
-    # 显示结果
     st.subheader("识别结果对比")
     col1, col2, col3 = st.columns(3)
     with col1: st.image(img, caption="原图", use_container_width=True)
     with col2: st.image(result, caption="边界+杂质识别", use_container_width=True)
-    with col3: st.image(clustered_with_labels, caption="颜色聚类分割+标签", use_container_width=True)
+    with col3: st.image(clustered_with_labels, caption="颜色聚类分割+标签+次要颜色边界", use_container_width=True)
 
     # 颜色比例统计
     st.subheader("颜色比例统计")
@@ -158,3 +174,4 @@ if img is not None:
     color_csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
     df_props.to_csv(color_csv_file.name, index=False)
     st.download_button("下载颜色比例 CSV", color_csv_file.name, file_name="color_proportions_named.csv")
+
