@@ -26,11 +26,11 @@ def detect_anomalies(enhanced_gray):
 
 def overlay_results(original_img, edges, anomalies):
     overlay = np.array(original_img).copy()
-    overlay[edges] = [255,0,0]
-    overlay[anomalies] = [0,255,0]
+    overlay[edges] = [255,0,0]   # 红色表示层界面
+    overlay[anomalies] = [0,255,0]  # 绿色表示异常杂质
     return overlay
 
-# --- 层厚度计算（修复空列报错） ---
+# --- 层厚度计算 ---
 def calculate_layer_thickness(edges):
     h, w = edges.shape
     thickness_data = []
@@ -45,15 +45,11 @@ def calculate_layer_thickness(edges):
     if not thickness_data:
         return None, None
 
-    # 找到最长厚度列
     max_len = max(len(x) for x in thickness_data)
-
-    # 构建 DataFrame，每列不足长度用 NaN 填充
     df_data = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan) for x in thickness_data]
     df = pd.DataFrame(df_data).astype(float)
 
-    # 统计非零厚度
-    valid_values = df.values[~np.isnan(df.values) & (df.values>0)]
+    valid_values = df.values[~np.isnan(df.values) & (df.values > 0)]
     stats = {
         "平均厚度": np.mean(valid_values),
         "最小厚度": np.min(valid_values),
@@ -66,7 +62,10 @@ def calculate_layer_thickness(edges):
 option = st.radio("选择图像输入方式", ["上传图片", "使用摄像头"])
 
 if option == "上传图片":
-    uploaded_file = st.file_uploader("选择图片文件", type=["jpg","png","jpeg","tif","tiff"])
+    uploaded_file = st.file_uploader(
+        "选择图片文件", 
+        type=["jpg","png","jpeg","tif","tiff"]  # ✅ 支持 tif/tiff
+    )
     if uploaded_file is not None:
         img = Image.open(uploaded_file).convert("RGB")
 elif option == "使用摄像头":
@@ -81,8 +80,12 @@ if 'img' in locals():
     anomalies = detect_anomalies(enhanced)
     result = overlay_results(img, edges, anomalies)
 
-    st.subheader("识别结果")
-    st.image(result, use_container_width=True)
+    st.subheader("识别结果对比")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(img, caption="原图", use_container_width=True)
+    with col2:
+        st.image(result, caption="识别结果", use_container_width=True)
 
     # 厚度统计
     thickness_stats, thickness_df = calculate_layer_thickness(edges)
@@ -103,3 +106,4 @@ if 'img' in locals():
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         result_pil.save(tmp_file.name)
         st.download_button("下载图片", tmp_file.name, file_name="layer_detection_result.png")
+
