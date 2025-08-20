@@ -6,8 +6,9 @@ import pandas as pd
 from skimage import color, filters, morphology, feature, exposure
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
+import cv2
 
-st.title("层状物识别与颜色人工标注系统（偏黑敏感版）")
+st.title("层状物识别与颜色标注系统（增强版）")
 
 # --- 图像预处理 ---
 def preprocess_image(img):
@@ -17,22 +18,24 @@ def preprocess_image(img):
 
 def detect_layer_edges(enhanced_gray):
     edges = feature.canny(enhanced_gray, sigma=1.0)
-    edges_dilated = morphology.dilation(edges, morphology.rectangle(1, 25))
-    return edges_dilated
+    return morphology.dilation(edges, morphology.rectangle(1, 25))
 
 def detect_anomalies(enhanced_gray):
     thresh_val = filters.threshold_local(enhanced_gray, block_size=35)
     binary = enhanced_gray < thresh_val
-    clean = morphology.opening(binary, morphology.square(3))
-    return clean
+    return morphology.opening(binary, morphology.square(3))
 
-def overlay_results(original_img, edges, anomalies):
+def overlay_edges(original_img, edges):
     overlay = np.array(original_img).copy()
-    overlay[edges] = [255, 0, 0]     # 红色表示层界面
-    overlay[anomalies] = [0, 255, 0] # 绿色表示异常杂质
+    overlay[edges] = [255, 0, 0]  # 红色
     return overlay
 
-# --- 丰富灰度颜色命名（偏黑敏感） ---
+def overlay_anomalies(original_img, anomalies):
+    overlay = np.array(original_img).copy()
+    overlay[anomalies] = [0, 255, 0]  # 绿色
+    return overlay
+
+# --- 自动颜色命名（偏黑敏感） ---
 def rgb_to_name(rgb):
     r, g, b = rgb
     brightness = (r + g + b)/3
@@ -51,126 +54,115 @@ def rgb_to_name(rgb):
     else:
         return "白色"
 
-# --- 颜色聚类 + 自动颜色命名 + 比例统计 ---
+# --- 颜色聚类 ---
 def color_clustering(img, n_clusters=4):
     img_np = np.array(img)
-    h, w, c = img_np.shape
+    h, w, _ = img_np.shape
     reshaped = img_np.reshape((-1, 3))
+
     kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
     labels = kmeans.fit_predict(reshaped)
+
     clustered_img = labels.reshape((h, w))
     clustered_rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    avg_colors = []
+
+    avg_colors, proportions = [], []
     for i in range(n_clusters):
         cluster_pixels = reshaped[labels == i]
         avg_rgb = np.mean(cluster_pixels, axis=0)
         avg_colors.append(avg_rgb)
-        clustered_img_mask = labels.reshape((h, w)) == i
-        clustered_rgb[clustered_img_mask] = avg_rgb.astype(np.uint8)
-    color_names = [rgb_to_name(avg) for avg in avg_colors]
-    proportions_named = {}
-    for i, name in enumerate(color_names):
-        proportions_named[name] = np.sum(labels == i) / len(labels) * 100
-    return clustered_rgb, proportions_named, avg_colors, labels.reshape((h, w))
+        proportions.append(len(cluster_pixels) / len(reshaped) * 100)
+        clustered_rgb[clustered_img == i] = avg_rgb.astype(np.uint8)
 
-# --- 在聚类结果上叠加原图边界 ---
-def overlay_on_cluster(clustered_img, edges, anomalies):
-    overlay = clustered_img.copy()
-    overlay[edges] = [255, 0, 0]      # 红色表示层界面
-    overlay[anomalies] = [0, 255, 0]  # 绿色表示异常杂质
-    return overlay
+    # 排序：按面积比例从大到小
+    color_info = sorted(
+        [(rgb_to_name(avg_colors[i]), proportions[i], avg_colors[i], i) for i in range(n_clusters)],
+        key=lambda x: x[1], reverse=True
+    )
+    return clustered_rgb, color_info, clustered_img
 
-# --- 人工标注匹配函数 ---
-def match_label(avg_rgb, mapping_df):
-    diffs = np.sqrt(((mapping_df[['R','G','B']].values - avg_rgb) ** 2).sum(axis=1))
-    return mapping_df.iloc[np.argmin(diffs)]['label']
+# --- 加标签 ---
+def add_labels(clustered_rgb, clustered_img, color_info, custom_names):
+    labeled_img = clustered_rgb.copy()
+    for idx, (default_name, _, _, cluster_id) in enumerate(color_info):
+        mask = clustered_img == cluster_id
+        if np.sum(mask) == 0:
+            continue
+        y, x = np.argwhere(mask).mean(axis=0).astype(int)
+        name = custom_names.get(default_name, default_name)
+        cv2.putText(labeled_img, name, (x, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+    return labeled_img
 
-# --- 图像输入 ---
+# --- 界面输入 ---
 option = st.radio("选择图像输入方式", ["上传图片", "使用摄像头"])
 img = None
 if option == "上传图片":
     uploaded_file = st.file_uploader("选择图片文件", type=["jpg","png","jpeg","tif","tiff"])
-    if uploaded_file is not None:
+    if uploaded_file:
         img = Image.open(uploaded_file).convert("RGB")
 elif option == "使用摄像头":
     captured_file = st.camera_input("拍摄照片")
-    if captured_file is not None:
+    if captured_file:
         img = Image.open(captured_file).convert("RGB")
 
-# --- 处理与显示 ---
+# --- 处理 ---
 if img is not None:
     enhanced = preprocess_image(img)
     edges = detect_layer_edges(enhanced)
     anomalies = detect_anomalies(enhanced)
-    result = overlay_results(img, edges, anomalies)
 
-    n_clusters = st.slider("选择颜色类别数量", min_value=3, max_value=6, value=4, step=1)
-    clustered_result, proportions, avg_colors, labels_img = color_clustering(img, n_clusters=n_clusters)
-    cluster_overlay_result = overlay_on_cluster(clustered_result, edges, anomalies)
+    edge_img = overlay_edges(img, edges)
+    anomaly_img = overlay_anomalies(img, anomalies)
 
+    n_clusters = st.slider("选择颜色类别数量", 3, 6, 4)
+    clustered_result, color_info, clustered_img = color_clustering(img, n_clusters)
+
+    # 人工修改颜色命名
+    st.subheader("人工修改颜色命名")
+    custom_names = {}
+    for name, _, _, _ in color_info:
+        new_name = st.text_input(f"修改 [{name}] 的标签：", value=name)
+        custom_names[name] = new_name
+
+    clustered_with_labels = add_labels(clustered_result, clustered_img, color_info, custom_names)
+
+    # 显示结果
     st.subheader("识别结果对比")
     col1, col2, col3, col4 = st.columns(4)
     with col1: st.image(img, caption="原图", use_container_width=True)
-    with col2: st.image(result, caption="边界+杂质识别", use_container_width=True)
-    with col3: st.image(clustered_result, caption="颜色聚类分割", use_container_width=True)
-    with col4: st.image(cluster_overlay_result, caption="聚类+叠加边界", use_container_width=True)
+    with col2: st.image(edge_img, caption="层界面识别", use_container_width=True)
+    with col3: st.image(anomaly_img, caption="杂质识别", use_container_width=True)
+    with col4: st.image(clustered_with_labels, caption="颜色聚类分割+标签", use_container_width=True)
 
-    # 颜色比例统计
+    # 统计比例
     st.subheader("颜色比例统计")
-    df_props = pd.DataFrame(list(proportions.items()), columns=["颜色", "比例 (%)"])
+    df_props = pd.DataFrame(
+        [(custom_names[name], prop) for name, prop, _, _ in color_info],
+        columns=["颜色", "比例 (%)"]
+    )
     st.table(df_props)
+
     fig, ax = plt.subplots()
     ax.pie(df_props["比例 (%)"], labels=df_props["颜色"], autopct="%.2f%%", startangle=90)
     ax.axis("equal")
     st.pyplot(fig)
 
-    # --- 人工标注 ---
-    st.subheader("人工标注颜色类别")
-    color_labels = {}
-    for i, avg_rgb in enumerate(avg_colors):
-        hex_color = '#%02x%02x%02x' % tuple(avg_rgb.astype(int))
-        label = st.text_input(f"类别{i+1} ({hex_color}) 对应标签", value=f"标签{i+1}")
-        color_labels[i] = label
-
-    # 保存标注映射
-    if st.button("保存标注映射 CSV"):
-        mapping_df = pd.DataFrame({
-            'cluster_index': list(color_labels.keys()),
-            'label': list(color_labels.values()),
-            'R': [avg[0] for avg in avg_colors],
-            'G': [avg[1] for avg in avg_colors],
-            'B': [avg[2] for avg in avg_colors]
-        })
-        mapping_df.to_csv("color_label_mapping.csv", index=False)
-        st.success("标注映射已保存 color_label_mapping.csv")
-
-    # --- 自动标签匹配展示 ---
-    st.subheader("自动标签匹配结果（当前图片）")
-    if st.button("匹配标签"):
-        mapping_df = pd.DataFrame({
-            'cluster_index': list(color_labels.keys()),
-            'label': list(color_labels.values()),
-            'R': [avg[0] for avg in avg_colors],
-            'G': [avg[1] for avg in avg_colors],
-            'B': [avg[2] for avg in avg_colors]
-        })
-        label_img = np.zeros(labels_img.shape, dtype=object)
-        for i, avg_rgb in enumerate(avg_colors):
-            label = match_label(avg_rgb, mapping_df)
-            label_img[labels_img==i] = label
-        st.write("标签示例（前100像素）:", label_img.flatten()[:100])
+    # 单独显示各类
+    st.subheader("单独颜色类别展示")
+    cols = st.columns(len(color_info))
+    for i, (name, _, avg_rgb, cluster_id) in enumerate(color_info):
+        mask = clustered_img == cluster_id
+        single_img = np.ones_like(clustered_result, dtype=np.uint8) * 255
+        single_img[mask] = avg_rgb.astype(np.uint8)
+        with cols[i % len(cols)]:
+            st.image(single_img, caption=f"{custom_names[name]}", use_container_width=True)
 
     # CSV 下载
-    color_csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-    df_props.to_csv(color_csv_file.name, index=False)
-    st.download_button("下载颜色比例 CSV", color_csv_file.name, file_name="color_proportions_named.csv")
+    csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    df_props.to_csv(csv_file.name, index=False)
+    st.download_button("下载颜色比例 CSV", csv_file.name, file_name="color_proportions_named.csv")
 
-    # 下载识别结果图片
-    st.subheader("下载识别结果图片")
-    result_pil = Image.fromarray(result.astype(np.uint8))
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-        result_pil.save(tmp_file.name)
-        st.download_button("下载图片", tmp_file.name, file_name="layer_detection_result.png")
 
 
 
