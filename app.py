@@ -7,7 +7,7 @@ from skimage import color, filters, morphology, feature, exposure
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 
-st.title("层状物识别与颜色人工标注系统")
+st.title("层状物识别与颜色人工标注系统（偏黑敏感版）")
 
 # --- 图像预处理 ---
 def preprocess_image(img):
@@ -32,36 +32,21 @@ def overlay_results(original_img, edges, anomalies):
     overlay[anomalies] = [0, 255, 0] # 绿色表示异常杂质
     return overlay
 
-# --- 层厚度计算（隐藏输出） ---
-def calculate_layer_thickness(edges):
-    h, w = edges.shape
-    thickness_data = []
-    for col in range(w):
-        ys = np.where(edges[:, col])[0]
-        if len(ys) >= 2:
-            col_thickness = ys[1:] - ys[:-1]
-            if len(col_thickness) > 0:
-                thickness_data.append(col_thickness.astype(float))
-    if not thickness_data:
-        return None
-    max_len = max(len(x) for x in thickness_data)
-    df_data = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan).astype(float) for x in thickness_data]
-    df = pd.DataFrame(df_data)
-    return df
-
-# --- 丰富灰度颜色命名 ---
+# --- 丰富灰度颜色命名（偏黑敏感） ---
 def rgb_to_name(rgb):
     r, g, b = rgb
     brightness = (r + g + b)/3
-    if brightness < 30:
+    if brightness < 15:
+        return "纯黑"
+    elif brightness < 35:
         return "黑色"
-    elif brightness < 60:
+    elif brightness < 55:
         return "深灰"
-    elif brightness < 100:
+    elif brightness < 85:
         return "灰色"
-    elif brightness < 140:
+    elif brightness < 120:
         return "浅灰"
-    elif brightness < 190:
+    elif brightness < 170:
         return "亮灰"
     else:
         return "白色"
@@ -130,9 +115,6 @@ if img is not None:
     with col3: st.image(clustered_result, caption="颜色聚类分割", use_container_width=True)
     with col4: st.image(cluster_overlay_result, caption="聚类+叠加边界", use_container_width=True)
 
-    # 层厚度计算（隐藏）
-    _ = calculate_layer_thickness(edges)
-
     # 颜色比例统计
     st.subheader("颜色比例统计")
     df_props = pd.DataFrame(list(proportions.items()), columns=["颜色", "比例 (%)"])
@@ -189,6 +171,7 @@ if img is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         result_pil.save(tmp_file.name)
         st.download_button("下载图片", tmp_file.name, file_name="layer_detection_result.png")
+
 
 
 
